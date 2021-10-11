@@ -1,0 +1,140 @@
+1. Load data from CSV to Hive
+=====================================
+cd Desktop
+hadoop fs -copyFromLocal MsStaff.csv
+hadoop fs -copyFromLocal MsCustomer.csv
+hadoop fs -chmod 777 /user/cloudera/MsStaff.csv
+hadoop fs -chmod 777 /user/cloudera/MsCustomer.csv
+
+CREATE EXTERNAL TABLE MsCustomer(
+    CustomerId VARCHAR(10),
+    CustomerName VARCHAR(255),
+    CustomerGender VARCHAR(10),
+    CustomerAddress VARCHAR(255)
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE
+TBLPROPERTIES("skip.header.line.count" = "1");
+
+CREATE EXTERNAL TABLE MsStaff(
+    StaffId VARCHAR(10),
+    StaffName VARCHAR(255),
+    StaffGender VARCHAR(10),
+    StaffAddress VARCHAR(255)
+)
+ROW FORMAT DELIMITED
+FIELDS TERMINATED BY ','
+STORED AS TEXTFILE
+TBLPROPERTIES("skip.header.line.count" = "1");
+
+LOAD DATA INPATH "/user/cloudera/MsCustomer.csv" INTO TABLE MsCustomer;
+LOAD DATA INPATH "/user/cloudera/MsStaff.csv" INTO TABLE MsStaff;
+
+2. Load data from MySQL to Hive
+=========================================================================================================
+mysql -u root -p
+cloudera
+create database animal;
+use animal;
+source create+insert.sql;
+exit;
+
+sudo sqoop import-all-tables --connect jdbc:mysql://quickstart:3306/animal --username=root -P --hive-import --hive-database=animal
+cloudera
+
+
+3. Query Analysis
+=========================================================================================================
+a. Show 5 most sold animals where the price of the animal is above 500.
+
+select  ma.animalname,
+        count(td.transactionid) as sold_animal,
+        ma.animalprice as price
+from msanimal ma
+join transactiondetail td on ma.animalid = td.animalid
+where ma.animalprice > 500
+group by ma.animalname, ma.animalprice
+order by sold_animal desc
+limit 5;
+
+
+b. Show all animals and its total transaction in which animal type is Echinoderm or Insecta
+
+select  ma.animalname,
+        mat.animaltypename,
+        sum(ma.animalprice * td.quantity) as total_transaction
+from msanimal ma
+join msanimaltype mat on ma.animaltypeid = mat.animaltypeid
+join transactiondetail td on ma.animalid = td.animalid
+where mat.animaltypename = "Echinoderm" or mat.animaltypename = "Insecta"
+group by ma.animalname, mat.animaltypename;
+
+
+c. Show 5 male staffs who handle the most number of transactions.
+
+select  ms.staffname,
+        ms.staffgender,
+        count(th.transactionid) as transactions_handle
+from msstaff ms 
+join transactionheader th on ms.staffid = th.staffid
+where ms.staffgender = "Male"
+group by ms.staffname, ms.staffgender
+order by transactions_handle desc
+limit 5;
+
+
+d. Show all customers who spent more money than the average of other customers in 2008.
+
+select  mc.customername,
+            year(th.transactiondate) as transaction_year,
+            sum(ma.animalprice * td.quantity) as money_spent
+from mscustomer mc
+join transactionheader th on mc.customerid = th.customerid
+join transactiondetail td on th.transactionid = td.transactionid
+join msanimal ma on td.animalid = ma.animalid,
+(
+    select avg(sub1.money_spent) as avg_spent
+    from (
+        select  mc.customername,
+            year(th.transactiondate) as transaction_year,
+            sum(ma.animalprice * td.quantity) as money_spent
+        from mscustomer mc
+        join transactionheader th on mc.customerid = th.customerid
+        join transactiondetail td on th.transactionid = td.transactionid
+        join msanimal ma on td.animalid = ma.animalid
+        where year(th.transactiondate) = 2008
+        group by mc.customername, year(th.transactiondate)
+    ) as sub1
+) as sub2
+where year(th.transactiondate) = 2008
+group by mc.customername, year(th.transactiondate), sub2.avg_spent
+having money_spent > sub2.avg_spent;
+
+
+e. Show all animals in transaction and its total price per animal after discount for 
+transaction made after 1999 and that the animals have been purchased in at least 10 transactions (any year). 
+The discount is determined as the following: 
+Total Price Per Animal in Transaction	    Discount
+More than 24999	                            70%
+Between 15000 and 24999	                    50%
+Between 5000 and 14999 	                    30%
+Below 5000	                            0%
+
+select  ma.animalname,
+        year(th.transactiondate) as year,
+        sum(ma.animalprice * td.quantity) as total_price,
+        count(distinct td.transactionid) as num_transactions,
+        case
+            when sum(ma.animalprice * td.quantity) > 24999 then "70%"
+            when sum(ma.animalprice * td.quantity) between 15000 and 24999 then "50%"
+            when sum(ma.animalprice * td.quantity) between 5000 and 14999 then "30%"
+            when sum(ma.animalprice * td.quantity) < 5000 then "0%"
+        end as discount
+from msanimal ma
+join transactiondetail td on ma.animalid = td.animalid
+join transactionheader th on th.transactionid = td.transactionid
+where year(th.transactiondate) > 1999
+group by ma.animalname, year(th.transactiondate)
+having num_transactions >= 10
+order by year asc;
